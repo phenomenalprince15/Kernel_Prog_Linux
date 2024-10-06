@@ -100,4 +100,108 @@ static int mp_debug_level;
 module_param(mp_debug_level, int, 0660);
 ```
 - Don't inititalize static int -> 0
-- module_param(varibale static, data_type, permissions) // 0660, sysfs visibility
+
+### module_param(varibale static, data_type, permissions) // 0660, sysfs visibility
+
+- Without any parameters, debug level zero.
+```
+wiki@pi:~/Linux-Kernel-Programming_2E/ch5/modparams/modparams1$ modinfo -p modparams1.ko 
+mp_debug_level:Debug level [0-2]; 0 => no debug messages, 2 => high verbosity (int)
+mp_strparam:A demo string parameter (charp)
+wiki@pi:~/Linux-Kernel-Programming_2E/ch5/modparams/modparams1$ sudo dmesg -C
+wiki@pi:~/Linux-Kernel-Programming_2E/ch5/modparams/modparams1$ sudo insmod modparams1.ko 
+wiki@pi:~/Linux-Kernel-Programming_2E/ch5/modparams/modparams1$ sudo dmesg
+[ 2646.142087] modparams1: loading out-of-tree module taints kernel.
+[ 2646.142979] modparams1:modparams1_init(): inserted
+[ 2646.142994] modparams1:modparams1_init(): module parameters passed: mp_debug_level=0 mp_strparam=My string param
+wiki@pi:~/Linux-Kernel-Programming_2E/ch5/modparams/modparams1$ 
+```
+
+- with paramemetrs passing
+```
+wiki@pi:~/Linux-Kernel-Programming_2E/ch5/modparams/modparams1$ sudo insmod modparams1.ko mp_debug_level=2 mp_strparam=\"hello modparams1\"
+wiki@pi:~/Linux-Kernel-Programming_2E/ch5/modparams/modparams1$ sudo dmesg
+[ 2945.172643] modparams1:modparams1_init(): inserted
+[ 2945.172667] modparams1:modparams1_init(): module parameters passed: mp_debug_level=2 mp_strparam=hello modparams1
+wiki@pi:~/Linux-Kernel-Programming_2E/ch5/modparams/modparams1$ sudo rmmod modparams1 
+wiki@pi:~/Linux-Kernel-Programming_2E/ch5/modparams/modparams1$ sudo dmesg
+[ 2945.172643] modparams1:modparams1_init(): inserted
+[ 2945.172667] modparams1:modparams1_init(): module parameters passed: mp_debug_level=2 mp_strparam=hello modparams1
+[ 2963.363710] modparams1:modparams1_exit(): module parameters passed: mp_debug_level=2 mp_strparam=hello modparams1
+[ 2963.363731] modparams1:modparams1_exit(): removed
+```
+
+#### File is generated inside /sys/module/(module_name)
+- charp is character pointer
+```
+wiki@pi:~/Linux-Kernel-Programming_2E/ch5/modparams/modparams1$ sudo insmod modparams1.ko 
+wiki@pi:~/Linux-Kernel-Programming_2E/ch5/modparams/modparams1$ ls /sys/module/modparams1/
+coresize  holders  initsize  initstate  notes  parameters  refcnt  sections  srcversion  taint  uevent  version
+wiki@pi:~/Linux-Kernel-Programming_2E/ch5/modparams/modparams1$ ls /sys/module/modparams1/parameters/
+mp_debug_level  mp_strparam
+```
+
+#### What if user must pass params explicitly
+
+- It is handled with parameter static int "control_freak"
+```
+wiki@pi:~/Linux-Kernel-Programming_2E/ch5/modparams/modparams2$ sudo insmod modparams2.ko 
+insmod: ERROR: could not insert module modparams2.ko: Invalid parameters
+wiki@pi:~/Linux-Kernel-Programming_2E/ch5/modparams/modparams2$ sudo dmesg
+[  833.958088] modparams2: loading out-of-tree module taints kernel.
+[  833.958671] modparams2:modparams2_init(): inserted
+[  833.958679] modparams2:modparams2_init(): I'm a control freak; thus, you *Must* pass along module parameter 'control_freak', value in the range [1-5]; aborting...
+```
+
+#### Additional modules
+```
+module_param_cb() // for callback
+module_param_desc() // for description
+```
+
+#### Overriding the module's parameters name
+```
+module_param_named(current_allocated_bytes, dm_bufio_current_allocated, ulong, S_IRUGO)
+MODULE_PARAM_DESC(current_allocated_bytes, "Memory currently used by the cache")
+```
+current_allocated_bytes -> alias or name override of internal variable in dm_bufio_current_allocated
+
+
+#### Hardware related kernel parameters
+
+- It has a seperate macro: module_param_hw[_named|array]()
+- https://lwn.net/Articles/708274/
+- Module params that specify hardare params: io ports, iomem addresses, irqs, dma channels, fixed dma buffers and other types.
+- This enables params to be locked down in the core parameter parser for secure boot support.
+
+### Floating point not allowed in kernel
+- well then how can we do FP operations ?
+- Use, user-space mode, take help from there.
+- APIs like call_usermodehelper*()
+- Also, there exists a way to do forcing FP in the kernel, put your FP code between kernel_fpu_begin() and kernel_fpu_end() macros.
+- It's used in crypto, AES, CRC and others...
+- You'll end up with Call Trace in dmesg.
+
+### Auto-loading of modules at boot
+```
+install:
+        sudo make -C $(KDIR) M=$(PWD) modules_install
+
+sudo modprobe module_name
+# modprobe is intelligent version of insmode
+```
+- Files are stores in order at modules.order it will be installed at /lib/modules/$(uname -r)/extra or /updates (in arm)
+- depmod creates modules.dep files (it arranges the modules) after modules are installed into kernel, it takes care of it.
+```
+wiki@pi:/lib/modules/6.8.0-1012-raspi/updates$ grep user_lkm /lib/modules/$(uname -r)/* 2>/dev/null
+/lib/modules/6.8.0-1012-raspi/modules.dep:updates/user_lkm.ko: updates/core_lkm.ko
+```
+- modules.symbols has information on all exported module symbols, similarly modules.symvers
+- we can /proc/kallsyms pseduofile, all symbols in kernel symbol table - exported and private along with their virtual addresses are seen here. (try sudo cat /proc/kallsyms)
+
+- Only modern linux, e have systemd taking care of auto-loading kernel modules by parsing the content of files: /etc/modules-load.d/*
+(responsible for systemd-modules-load.service)
+- if any module misbehaves, we can blacklist it in /etc/modules-load.d
+```
+module_blacklist= ....
+```
