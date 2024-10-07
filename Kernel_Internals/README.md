@@ -42,6 +42,8 @@ Heap grows up towards higherr VA and last legally reference able location one th
 - The stacks of other threads can be allocated anywhere between lib mappings and main() is at the top of stack.
 - Try procmap() utility for VAS visual.
 
+![Context](../Images/Context.jpg)
+
 ### Process, threads and their stacks
 
 - Threads share everything, all process resources, user VAS, open files, signal dispositions, IPC objects, pagining tables and more except the stack.
@@ -72,10 +74,14 @@ Heap grows up towards higherr VA and last legally reference able location one th
 5. Every thread alive has a task structure in kenel, that's how it tracks it and all threads attributes are stored here.
 - and also a seperate stack IRQ is present to read hardware interrupts.
 
+![User space VAS](../Images/User_space_VAS.jpg)
+
 ## Viewing the User and Kernel stacks
 
 - It's helpful in debug as the stack only holds the current execution context of the thread in hich funtion it is executing code right now, how it got here - which allows us to inder the history.
 - Being able to see and interpret the thread's call stack (call chain/call trace/ backtrace) is crucial.
+
+![user and kernel](../Images/user_and_kernel.jpg)
 
 #### We can see throguh proc filesystem (kernel space stack of a given thread or process)
 
@@ -177,4 +183,125 @@ examples:
     ./stackcount -U t:sched:sched_switch   # user stacks only
 ```
 
-- Other profiling tools, perf, flame graphs, bpftrace
+- Other profiling tools, perf, flame graphs, bpftrace, strace
+
+![Project Screenshot](../Images/Kernel_VAS.jpg)
+
+## More view of VAS
+- There is lot more going on in kenel: per thread task structures, kernel threads, perr-process memory descriptor metadata structures, open file metadata structures, IPC metadata structures, and so on. Kerel VAs or segment.
+- Kernnel: user and kernel thread creation/destruction, CPU scheduling, synchronization primitives, singalling, timerrs, interrupt headling, namespaces, cgroups, module support etc.
+- MMU, VFS, Networking, Virt, Sound, IPC, Block IO, arch-speicifc cpurs and mmu/ram stuff
+
+- Every single user and kernel space thread is interally represented within the linux kernel by a metadata containing all attributes - task structure.
+- include/linux/sched.h: struct task_struct (also known as process descriptor) it represents a runnable task, a thread.
+- Every process consists of one or more threads adn each thread maps to a kernel metadata struct called a task structure(struct task_struct).
+- It's the "root" metadata fir tge thread as it has all the information required by the OS for that thread.
+- Info.: info on its memory (segments/mappings setup, paging tables, usage info and more), CPU scheduling details, all files it currently has open, it's credentials, capability bitmasks, timers, locks, Asynchronous I/O (AIO) contexts, hardware context ingo, signal dispositions, IPC objects, resource limits, audit (optional), security and profiling info and many more.
+
+![Task Structure](../Images/Task_Structure.jpg)
+
+### Looking into kernel Task struct and how to access
+
+- Task struct is essentially the root data structure of the process or thread. It holds all the attributes of the task.
+
+```
+// include/linux/sched.h
+stuct task_struct {
+    struct thread_info thread_info; // important flags and status bits
+    ...
+    // members that fllow are to do with CPU sched
+    int on_rq;
+    int prio;
+    int static prio;
+    unsigned int rt_priority
+    struct sched_entity se;
+    ...
+    // some memory management info.
+    struct mm_struct *mm;
+    struct mm_struct *active_mm;
+    // task pid (process id) and tgid (thread group id)
+    pid_t pid;
+    pid_t tgid;
+    // credentials
+    //signal handlers
+    ...
+    // pointer to files
+
+    // task hardware context detail
+}
+```
+
+#### How to access the task struct with current
+- All the task struct objects in kernel memory are chained up on a CIRUCULAR DOUBLY LINKED LIST called the task list.
+- So, how exactly does it find it's task from the task_list ?
+- It checks up on macro called current.
+1. Looking up currsent yields the pointer to struct task_struct of the thread that is running the kernel code right now.
+2. current is analogus to this (like in oops but not exactly)
+3. Implementation of current is arch specific. O(1) time.
+Like in RISC (Reduced Instruction Set Computer) arch, there is current register available.
+4. To access we can use, current->pid, current->comm like that.
+
+### Determining the Context
+- Process context (or task)
+- Interrupt context (or an atomic)
+
+- They are mututally exclusive.
+- Why is it important to determine the context ?
+- The kernel is that you can not sleep (or block) in any kind of atomic context; doing so causes a kernel bug. it can lck up the system, typically causing a kernel panic.
+- why ? Sleeping implies context-switching, switching the CPU to run another task hile the previous one goes to sleep.
+- Sleeping implies invoking the scheduler code and a subsequent context switch.
+- Atomic imples running to complletion without interruption.
+
+How do we know it's in atomic context or not ?
+- include/linux/preempt.h
+- in_task() macro returns a boolean, your code is running in process or task context if true and usually safe to sleep and false is in atomic context, never safe to sleep.
+```
+wiki@pi:~/Linux-Kernel-Programming_2E/ch6/current_affairs$ sudo insmod ./current_affairs.ko 
+wiki@pi:~/Linux-Kernel-Programming_2E/ch6/current_affairs$ lsmod | grep current_affairs.
+current_affairs        12288  0
+wiki@pi:~/Linux-Kernel-Programming_2E/ch6/current_affairs$ sleep 1
+wiki@pi:~/Linux-Kernel-Programming_2E/ch6/current_affairs$ sudo rmmod current_affairs 
+wiki@pi:~/Linux-Kernel-Programming_2E/ch6/current_affairs$ sudo dmesg
+[ 8224.775995] current_affairs: loading out-of-tree module taints kernel.
+[ 8224.776468] current_affairs:current_affairs_init(): inserted
+[ 8224.776476] current_affairs:current_affairs_init(): sizeof(struct task_struct)=8704
+[ 8224.776485] current_affairs:show_ctx(): 
+[ 8224.776489] current_affairs:show_ctx(): we're running in process context ::
+                name        : insmod
+                PID         :   5797
+                TGID        :   5797
+                UID         :      0
+                EUID        :      0 (have root)
+                state       : R
+                current (ptr to our process context's task_struct) :
+                              0xffff21f700888000 (0xffff21f700888000)
+                stack start : 0xffff800082128000 (0xffff800082128000)
+[ 8248.738490] current_affairs:show_ctx(): 
+[ 8248.738510] current_affairs:show_ctx(): we're running in process context ::
+                name        : rmmod
+                PID         :   5882
+                TGID        :   5882
+                UID         :      0
+                EUID        :      0 (have root)
+                state       : R
+                current (ptr to our process context's task_struct) :
+                              0xffff21f7070f0000 (0xffff21f7070f0000)
+                stack start : 0xffff800081650000 (0xffff800081650000)
+[ 8248.738527] current_affairs:current_affairs_exit(): removed
+```
+
+### Iterating Task List
+
+- Linux kernel uses a unique task structure to represent every thead, and as unique process identifier(pid).
+- So every thread has a unique PID. Then what about multi-threaded process, how can then multiple threads of the same process share a common PID (POSIX standards).
+- Every thread of a multi-threaded process has a unique PID. To fix as per standards
+- A new membe called Thread Group Identifier(TGID) was added in task structure.
+- If it's single threaded - TGID = PID
+- If it's multi-threaded TGID of main thread = PID of main thread and other threads of the process will inherit the main thread's TGID value but will have their own unique PID as well.
+- If TGID repeats, it's multi-threaded and PID value represents the unique PIDs of its worker and peer threads.
+- Try: ps -LA
+- PID and LWP will show up. LWP (Light weight process or thread)
+
+![Show all processes](../Images/show_all_processes.jpg)
+
+![Show all threads](../Images/show_all_threads.jpg)
